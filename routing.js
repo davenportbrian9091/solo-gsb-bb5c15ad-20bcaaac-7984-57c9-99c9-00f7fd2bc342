@@ -488,8 +488,332 @@ function computeRouting(locations, passages, cues, results) {
   };
 }
 
+/**
+ * 通道增设建议的试算次数上限（新增 1 条 / 2 条通道的候选组合逐个试算，
+ * 每个候选都要复用整组联合求解；超出即停止，结果标记 limited 而非超时）
+ */
+const TRIAL_CAP = 20000;
+
+/** 连通分量编号：同一连通分量内的区位返回同一整数（BFS，确定） */
+function connectedComponents(adj) {
+  const comp = new Map();
+  let id = 0;
+  for (const start of adj.keys()) {
+    if (comp.has(start)) continue;
+    comp.set(start, id);
+    const queue = [start];
+    for (let head = 0; head < queue.length; head++) {
+      for (const next of adj.get(queue[head])) {
+        if (!comp.has(next)) {
+          comp.set(next, id);
+          queue.push(next);
+        }
+      }
+    }
+    id += 1;
+  }
+  return comp;
+}
+
+/**
+ * 通道增设建议（纯函数，只预览，不写通道）：
+ *
+ * 只针对**最新重放结果中整组生效、但现有通道图上规划无解**（端点不连通 /
+ * 通道争用）的提示，从**现有区位间尚未连接的无向区位对**中搜索**至多两条**
+ * 新增通道，使所有生效提示都能取得两两不共边的线路。按新增条数 1 → 2
+ * 升序试算（条数少者优先）；同条数按候选端点名称排序（先按首条边的
+ * 两端名称，再按第二条），命中的首组即为建议结果，保证确定。
+ *
+ * 每个候选都**复用现有整组联合路径求解**（planCue + 全部简单路径枚举），
+ * 不是近似判断；原本就可行的提示不参与试算（其已有线路不会受新增通道影响）。
+ *
+ * 关键剪枝（不漏解）：记问题组转移端点所在连通分量集合为 R。
+ *  - 对「端点不连通」：新增边必须桥接问题端点所在的两个不同分量才有意义；
+ *  - 一般地，若一个候选的**每一条新增边两端都不在 R 内**，则问题组的全部
+ *    候选路径完全不变（新边所在的分量与 R 不相邻），必然仍是原问题；故只
+ *    枚举「至少一条边触碰 R」的候选。该剪枝对 1 / 2 条新增均完备。
+ *
+ * 规模保护：任一必要试算中某条转移的简单路径枚举超过 PATH_CAP，该候选
+ * 无法判定（不能据此判无解）；若因此无法在当前条数给出结论，整体返回
+ * limited('path_cap')，**不宣称最优或无解**。试算组合数超过 TRIAL_CAP
+ * 时返回 limited('trial_cap')。所有枚举范围内的候选都试完仍无方案时，
+ * 返回 none 并在 searched 中说明实际搜索范围（含被剪枝跳过的无关组合数）。
+ *
+ * @returns {object} 建议结果（结构见 API 文档 / 页面渲染）
+ */
+function computeRoutingSuggestions(locations, passages, cues, results) {
+  const current = computeRouting(locations, passages, cues, results);
+
+  if (current.effectiveCueCount === 0) {
+    return { status: 'empty', routing: current };
+  }
+
+  // 已有问题组：只针对它们搜索（limited 组本身就是「未计算」，不参与）
+  const problemGroups = current.groups
+    .filter((g) => g.status === 'disconnected' || g.status === 'contention')
+    .sort((a, b) => a.number - b.number);
+
+  // 现状中只要有「路径规模上限未计算」的生效提示，其可行性本来就未知，
+  // 而新增通道只会增加简单路径数量，该组仍无法计算——无法验证「所有生效
+  // 提示都取得线路」，整体按未计算处理，不给出建议也不宣称无解。
+  const limitedNow = current.groups.filter((g) => g.status === 'limited');
+  if (limitedNow.length) {
+    return {
+      status: 'limited',
+      reason: 'existing_limited',
+      addedCount: null,
+      added: [],
+      routing: current,
+      trials: 0,
+      limit: { cap: PATH_CAP, code: 'PATH_CAP' },
+      limitedCueNumbers: limitedNow.map((g) => g.number),
+    };
+  }
+
+  if (!problemGroups.length) {
+    return { status: 'ok_already', routing: current };
+  }
+
+  const locNames = locations.map((l) => l.name).sort();
+  const adj = buildGraph(passages);
+  ensureNodes(adj, locNames);
+  const existing = new Set(
+    passages.map((p) => edgeKey(p.loc_a, p.loc_b))
+  );
+  const comp = connectedComponents(adj);
+
+  // 问题组全部转移端点（disconnected / contention 组的端点都在 R 内）
+  const resultByNumber = new Map(results.map((r) => [r.number, r]));
+  const problemCues = cues.filter(
+    (c) => problemGroups.some((g) => g.number === c.number) &&
+      resultByNumber.get(c.number) && resultByNumber.get(c.number).ok
+  );
+  const relevantComps = new Set();
+  for (const cue of problemCues) {
+    for (const t of cue.transfers) {
+      if (comp.has(t.from)) relevantComps.add(comp.get(t.from));
+      if (comp.has(t.to)) relevantComps.add(comp.get(t.to));
+    }
+  }
+  const touchesR = (a, b) =>
+    relevantComps.has(comp.get(a)) || relevantComps.has(comp.get(b));
+
+  // 现有区位间尚未连接的无向区位对，按端点名称排序（a 升序、b 升序）
+  const candidates = [];
+  for (let i = 0; i < locNames.length; i++) {
+    for (let j = i + 1; j < locNames.length; j++) {
+      const a = locNames[i];
+      const b = locNames[j];
+      if (existing.has(edgeKey(a, b))) continue;
+      if (!touchesR(a, b)) continue; // 两端都在 R 外：对问题组无影响，跳过
+      candidates.push({ a, b });
+    }
+  }
+
+  // 被剪枝跳过的、与问题分量无关的候选边（用于「无方案」时说明搜索范围）
+  let irrelevantSingles = 0;
+  for (let i = 0; i < locNames.length; i++) {
+    for (let j = i + 1; j < locNames.length; j++) {
+      const a = locNames[i];
+      const b = locNames[j];
+      if (existing.has(edgeKey(a, b))) continue;
+      if (!touchesR(a, b)) irrelevantSingles += 1;
+    }
+  }
+
+  /**
+   * 对一组新增边试算：只为问题组复用整组联合求解（短路顺序：disconnected
+   * 组在前，BFS 最便宜；contention 组在后）。
+   * @returns {'feasible'|'infeasible'|'path_cap'}
+   */
+  function evaluate(added) {
+    const trialAdj = buildGraph([
+      ...passages,
+      ...added.map((e) => ({ loc_a: e.a, loc_b: e.b })),
+    ]);
+    ensureNodes(trialAdj, locNames);
+    for (const cue of [...problemCues].sort((x, y) => {
+      const gx = problemGroups.find((g) => g.number === x.number);
+      const gy = problemGroups.find((g) => g.number === y.number);
+      const rank = (g) => (g.status === 'disconnected' ? 0 : 1);
+      if (rank(gx) !== rank(gy)) return rank(gx) - rank(gy);
+      return x.number - y.number;
+    })) {
+      let group;
+      try {
+        group = planCue(cue, trialAdj);
+      } catch (err) {
+        if (err instanceof RoutingLimitError) return 'path_cap';
+        throw err;
+      }
+      if (group.status === 'limited') return 'path_cap';
+      if (group.status !== 'ok') return 'infeasible';
+    }
+    return 'feasible';
+  }
+
+  let trials = 0;
+  let sawPathCap = false; // 命中方案之前，是否有必要试算触发路径枚举上限
+
+  const makeSearched = (countsTried, countsSkipped, capped) => ({
+    locationCount: locNames.length,
+    existingPassageCount: passages.length,
+    candidatePairCount: candidates.length + irrelevantSingles,
+    relevantPairCount: candidates.length,
+    irrelevantPairCount: irrelevantSingles,
+    problemCueNumbers: problemGroups.map((g) => g.number),
+    maxAdded: 2,
+    trialCap: TRIAL_CAP,
+    pathCap: PATH_CAP,
+    countsTried,
+    countsSkipped,
+    capped: !!capped,
+  });
+
+  // 按新增条数 1 → 2 升序试算
+  for (const k of [1, 2]) {
+    let winner = null;
+    let cappedAtCount = false;
+
+    if (k === 1) {
+      for (const e1 of candidates) {
+        if (trials >= TRIAL_CAP) {
+          cappedAtCount = true;
+          break;
+        }
+        trials += 1;
+        const result = evaluate([e1]);
+        if (result === 'path_cap') {
+          sawPathCap = true;
+          continue;
+        }
+        if (result === 'feasible') {
+          winner = [e1];
+          break;
+        }
+      }
+    } else {
+      outer: for (let i = 0; i < candidates.length; i++) {
+        for (let j = i + 1; j < candidates.length; j++) {
+          if (trials >= TRIAL_CAP) {
+            cappedAtCount = true;
+            break outer;
+          }
+          trials += 1;
+          const result = evaluate([candidates[i], candidates[j]]);
+          if (result === 'path_cap') {
+            sawPathCap = true;
+            continue;
+          }
+          if (result === 'feasible') {
+            winner = [candidates[i], candidates[j]];
+            break outer;
+          }
+        }
+      }
+    }
+
+    if (winner) {
+      // 命中之前若有必要试算触发路径上限，则无法保证「条数最少 / 同条数首组」，
+      // 按规则整体标记未计算，不宣称最优
+      if (sawPathCap) {
+        return {
+          status: 'limited',
+          reason: 'path_cap',
+          addedCount: null,
+          added: [],
+          routing: current,
+          trials,
+          limit: { cap: PATH_CAP, code: 'PATH_CAP' },
+          searched: makeSearched(trials, 0, cappedAtCount),
+        };
+      }
+      // 命中后用同一套整组求解对全部生效提示重算一次，给出权威的修复后完整线路。
+      // 原本可行的组此时一并重算；新增边会增加路径数，它们反而可能触发路径
+      // 枚举上限——此时无法确认「所有生效提示都取得线路」，按未计算处理。
+      const after = computeRouting(
+        locations,
+        [...passages, ...winner.map((e) => ({ loc_a: e.a, loc_b: e.b }))],
+        cues,
+        results
+      );
+      if (after.groups.some((g) => g.status === 'limited')) {
+        return {
+          status: 'limited',
+          reason: 'path_cap',
+          addedCount: k,
+          added: winner,
+          routing: current,
+          trials,
+          limit: { cap: PATH_CAP, code: 'PATH_CAP' },
+          searched: makeSearched(trials, 0, false),
+        };
+      }
+      const afterByNumber = new Map(after.groups.map((g) => [g.number, g]));
+      const fixed = problemGroups.map((before) => {
+        const aft = afterByNumber.get(before.number);
+        return { number: before.number, note: before.note, before, after: aft };
+      });
+      return {
+        status: 'found',
+        addedCount: k,
+        added: winner,
+        routing: current,
+        after,
+        fixed,
+        trials,
+        searched: makeSearched(trials, 0, false),
+      };
+    }
+
+    if (cappedAtCount) {
+      // 试算组合数达到上限：当前条数未枚举完，不能宣称最优或 2 条内无解
+      return {
+        status: 'limited',
+        reason: 'trial_cap',
+        addedCount: k,
+        added: [],
+        routing: current,
+        trials,
+        limit: { cap: TRIAL_CAP, code: 'TRIAL_CAP' },
+        searched: makeSearched(trials, 0, true),
+      };
+    }
+
+    if (sawPathCap) {
+      // 本条数候选全部走到，但有候选因路径枚举上限未能判定，且更小条数也未命中：
+      // 无法断言本条数无解，也无法保证后续结论，标记未计算
+      return {
+        status: 'limited',
+        reason: 'path_cap',
+        addedCount: k,
+        added: [],
+        routing: current,
+        trials,
+        limit: { cap: PATH_CAP, code: 'PATH_CAP' },
+        searched: makeSearched(trials, 0, false),
+      };
+    }
+  }
+
+  // 1 条、2 条的相关候选均已完整试完，确无方案；说明实际搜索范围
+  const totalPairs = candidates.length + irrelevantSingles;
+  const skippedTwoEdges =
+    (totalPairs * (totalPairs - 1)) / 2 -
+    (candidates.length * (candidates.length - 1)) / 2;
+  return {
+    status: 'none',
+    addedCount: null,
+    added: [],
+    routing: current,
+    trials,
+    searched: makeSearched(trials, { 1: irrelevantSingles, 2: skippedTwoEdges }, false),
+  };
+}
+
 module.exports = {
   computeRouting,
+  computeRoutingSuggestions,
   planCue,
   buildGraph,
   reachable,
@@ -500,4 +824,5 @@ module.exports = {
   RoutingLimitError,
   PATH_CAP,
   DIAG_CAP,
+  TRIAL_CAP,
 };

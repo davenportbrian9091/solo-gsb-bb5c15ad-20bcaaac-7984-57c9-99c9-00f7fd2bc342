@@ -12,7 +12,7 @@ const {
 const { computeAssignments } = require('./assignment');
 const { computeRotation } = require('./rotation');
 const { normalizeAbsenceRules, computeAbsenceRotation } = require('./absence');
-const { computeRouting } = require('./routing');
+const { computeRouting, computeRoutingSuggestions } = require('./routing');
 
 const app = express();
 app.use(express.json());
@@ -630,6 +630,25 @@ app.get('/api/rotation', (req, res) => {
 app.get('/api/routing', (req, res) => {
   const { routing } = loadState();
   res.json(routing);
+});
+
+/* ---------- 通道增设建议（只读，不写通道） ----------
+ * 仅根据最新重放结果，针对通道规划中原本无解（端点不连通 / 通道争用）的
+ * 生效提示，从现有区位间尚未连接的无向区位对中按 1 条 → 2 条升序试算新增
+ * 通道，复用整组联合路径求解；只预览建议连接与修复后完整线路，不写入通道、
+ * 不改动数据库。
+ */
+app.get('/api/routing/suggestions', (req, res) => {
+  const { locations, props, cues } = loadBaseData();
+  const passages = loadPassages();
+  const replayResult = replay(locations, props, cues);
+  const suggestions = computeRoutingSuggestions(
+    locations,
+    passages.map((p) => ({ loc_a: p.a, loc_b: p.b })),
+    cues,
+    replayResult.results
+  );
+  res.json(suggestions);
 });
 
 /* ---------- 临时缺席试排（不写库） ----------

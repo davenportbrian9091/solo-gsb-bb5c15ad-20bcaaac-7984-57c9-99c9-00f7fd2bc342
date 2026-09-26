@@ -17,19 +17,21 @@ function toast(msg, okStyle) {
   toast._t = setTimeout(() => el.classList.add('hidden'), 3500);
 }
 
-async function api(path, method = 'GET', body) {
-  const res = await fetch(path, {
+function api(path, method = 'GET', body) {
+  return fetch(path, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    toast(data.error || '操作失败');
-    throw new Error(data.error || '操作失败');
-  }
-  state = data; // 所有变更接口都返回最新全量状态
-  render();
+  })
+    .then((res) => res.json().then((data) => ({ res, data })))
+    .then(({ res, data }) => {
+      if (!res.ok) {
+        toast(data.error || '操作失败');
+        throw new Error(data.error || '操作失败');
+      }
+      state = data; // 所有变更接口都返回最新全量状态
+      render();
+    });
 }
 
 function esc(s) {
@@ -225,7 +227,171 @@ function render() {
   renderAbsenceForm();
   renderPassages();
   renderRouting();
+  renderRoutingSuggestPlaceholder();
 }
+
+/* ---------- 通道增设建议（按需生成，只预览，不写入通道） ---------- */
+
+let routingSuggestion = null; // 最近一次生成的建议；任何正式数据变化后清空
+
+function clearRoutingSuggestion() {
+  routingSuggestion = null;
+  const panel = $('#routing-suggest-panel');
+  if (panel) {
+    panel.classList.add('hidden');
+    panel.innerHTML = '';
+  }
+  const stateEl = $('#routing-suggest-state');
+  if (stateEl) stateEl.textContent = '';
+}
+
+// render() 每次由最新全量状态触发：区位 / 通道 / 提示变化后旧建议即失效
+function renderRoutingSuggestPlaceholder() {
+  if (!routingSuggestion) clearRoutingSuggestion();
+}
+
+function suggestAddedEdgesHtml(added) {
+  return added
+    .map((e) => `<span class="chip rt2-suggest-edge">${esc(e.a)} <span class="arrow">—</span> ${esc(e.b)}</span>`)
+    .join('');
+}
+
+function suggestSearchedHtml(se) {
+  if (!se) return '';
+  const skipped1 = se.countsSkipped && se.countsSkipped[1] ? se.countsSkipped[1] : 0;
+  const skipped2 = se.countsSkipped && se.countsSkipped[2] ? se.countsSkipped[2] : 0;
+  return `
+    <div class="rt2-search-scope">
+      <div class="trace-title">搜索范围说明</div>
+      <ul class="rt2-scope-list">
+        <li>现有区位 <strong>${se.locationCount}</strong> 个、已建通道 <strong>${se.existingPassageCount}</strong> 条；尚未连接的无向区位对共 <strong>${se.candidatePairCount}</strong> 对。</li>
+        <li>其中与原无解提示的端区位相关、实际纳入试算的候选 <strong>${se.relevantPairCount}</strong> 对；另 <strong>${se.irrelevantPairCount}</strong> 对两端均在无关连通分量内（新增也不改变原无解提示的任何候选路径），按剪枝跳过。</li>
+        <li>按新增条数 1 → 2 升序试算，实际执行整组联合求解 <strong>${se.countsTried}</strong> 次${se.capped ? '（达到试算次数上限后停止）' : ''}；跳过无关组合：新增 1 条 ${skipped1} 个、新增 2 条 ${skipped2} 个。</li>
+        <li>规模保护：单条转移简单路径枚举上限 ${se.pathCap} 条，候选试算上限 ${se.trialCap} 组。</li>
+      </ul>
+    </div>`;
+}
+
+// 修复前状态：复用 ⑫ 的组渲染（端点不连通 / 通道争用 / 未计算原样展示）
+function suggestBeforeAfterHtml(item) {
+  const before = routingGroupHtml(item.before);
+  const after = routingGroupHtml(item.after);
+  return `
+    <div class="rt2-fix">
+      <div class="rt2-fix-side">
+        <div class="pv-side-label">修复前（现有通道，原无解）</div>
+        ${before}
+      </div>
+      <div class="rt2-fix-arrow">→</div>
+      <div class="rt2-fix-side">
+        <div class="pv-side-label">修复后（按建议临时增设，完整线路两两不共边）</div>
+        ${after}
+      </div>
+    </div>`;
+}
+
+function renderRoutingSuggestion(data) {
+  routingSuggestion = data;
+  const panel = $('#routing-suggest-panel');
+  $('#routing-suggest-state').textContent = '';
+
+  const head = '<div class="pv-title">🧩 通道增设建议（只预览：未在 ⑪ 中写入任何通道，区位 / 通道 / 提示变化后需重新生成）</div>';
+
+  if (data.status === 'empty') {
+    panel.innerHTML = `${head}<p class="hint">当前没有任何整组生效的提示，无需搜索增设通道（失败提示不参与通道规划）。</p>`;
+    panel.classList.remove('hidden');
+    return;
+  }
+
+  if (data.status === 'ok_already') {
+    panel.innerHTML = `${head}<div class="rt2-banner-ok">✓ 现有通道下全部生效提示均已能取得互不共边的线路，无需增设通道。</div>`;
+    panel.classList.remove('hidden');
+    return;
+  }
+
+  if (data.status === 'found') {
+    const edgeText = data.added.map((e) => `${e.a}—${e.b}`).join('、');
+    const fixed = data.fixed.map(suggestBeforeAfterHtml).join('');
+    panel.innerHTML = `
+      ${head}
+      <div class="rt2-banner-ok">
+        ✓ 建议新增 <strong>${data.addedCount}</strong> 条通道（按 1 条 → 2 条升序试算，这是条数最少的方案；同条数按端点名称排序取首组）：${suggestAddedEdgesHtml(data.added)}
+        新增后原无解的提示 <strong>${data.fixed.map((f) => f.number).join('、')}</strong> 均可取得两两不共边的线路。
+      </div>
+      <p class="hint">建议连接（仅预览，需舞台监督到 ⑪ 中手动添加才会真正写入）：${esc(edgeText)}</p>
+      <h4>原无解提示：修复前状态 → 修复后完整线路</h4>
+      ${fixed}
+      ${suggestSearchedHtml(data.searched)}`;
+    panel.classList.remove('hidden');
+    return;
+  }
+
+  if (data.status === 'limited') {
+    const limitedNow = (data.limitedCueNumbers || []).length;
+    const reasonText = data.reason === 'trial_cap'
+      ? `候选增设组合的试算次数达到上限（${data.limit.cap} 组），当前条数的候选<strong>未枚举完</strong>，本次结果为<strong>未计算</strong>：既不宣称已有最优建议，也不宣称两条以内无解。`
+      : data.reason === 'existing_limited'
+        ? `现状下提示 ${(data.limitedCueNumbers || []).join('、')} 的通道规划本身就因<strong>简单路径枚举量超过上限（${data.limit.cap} 条）而未计算</strong>；新增通道只会增加路径数量，这些提示仍无法判定，故无法验证「所有生效提示都取得线路」，本次建议<strong>未计算</strong>。`
+        : `某个必要试算中单条转移的简单路径枚举量超过上限（${data.limit.cap} 条），该候选无法判定，本次结果为<strong>未计算</strong>：既不宣称已有最优建议，也不宣称两条以内无解。`;
+    const problemItems = limitedNow
+      ? (data.routing && data.routing.groups || [])
+          .filter((g) => g.status !== 'ok')
+          .map((g) => routingGroupHtml(g))
+          .join('')
+      : '';
+    panel.innerHTML = `
+      ${head}
+      <div class="rt-blocked">
+        <div class="rt-block-title">⚠️ 通道增设建议未计算</div>
+        <p>${reasonText}</p>
+      </div>
+      ${problemItems ? `<h4>修复前状态（含未计算提示）</h4>${problemItems}` : ''}
+      ${data.searched ? suggestSearchedHtml(data.searched) : ''}`;
+    panel.classList.remove('hidden');
+    return;
+  }
+
+  // none：1 条、2 条的相关候选均完整试完，确无方案
+  const problemItems = (data.routing && data.routing.groups || [])
+    .filter((g) => g.status === 'disconnected' || g.status === 'contention' || g.status === 'limited')
+    .map((g) => routingGroupHtml(g))
+    .join('');
+  panel.innerHTML = `
+    ${head}
+    <div class="rt-blocked">
+      <div class="rt-block-title">✗ 新增不超过 2 条通道无法修复全部原无解提示</div>
+      <p>已按<strong>新增 1 条 → 新增 2 条</strong>的顺序，对现有区位间<strong>尚未连接的无向区位对</strong>逐个试算，并对每个候选复用整组联合路径求解；在实际搜索范围内未找到能让所有生效提示都取得互不共边线路的方案。</p>
+    </div>
+    <h4>修复前仍无解的提示（现状）</h4>
+    ${problemItems || '<p class="hint">（无）</p>'}
+    ${suggestSearchedHtml(data.searched)}
+    <p class="hint">注：本结论仅限「至多新增两条通道」的搜索范围；增设 3 条及以上未试算。</p>`;
+  panel.classList.remove('hidden');
+}
+
+function renderRoutingSuggestError(msg) {
+  const panel = $('#routing-suggest-panel');
+  panel.innerHTML = `<div class="pv-title">🧩 通道增设建议</div><div class="pv-error">${esc(msg)}</div>`;
+  panel.classList.remove('hidden');
+}
+
+$('#routing-suggest-run').addEventListener('click', async () => {
+  const btn = $('#routing-suggest-run');
+  const stateEl = $('#routing-suggest-state');
+  btn.disabled = true;
+  stateEl.textContent = '正在按 1 条 → 2 条试算新增通道…';
+  try {
+    const res = await fetch('/api/routing/suggestions');
+    const data = await res.json();
+    if (!res.ok) renderRoutingSuggestError(data.error || '建议生成失败');
+    else renderRoutingSuggestion(data);
+  } catch (err) {
+    renderRoutingSuggestError('无法连接服务器');
+  } finally {
+    btn.disabled = false;
+    stateEl.textContent = '';
+  }
+});
 
 /* ---------- 换景人员与逐提示岗位表 ---------- */
 

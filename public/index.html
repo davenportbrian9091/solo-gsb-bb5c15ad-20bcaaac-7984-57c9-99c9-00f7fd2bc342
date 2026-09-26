@@ -181,11 +181,24 @@
       </div>
 
       <div class="card" id="routing-card">
-        <h2>⑫ 换景通道规划预警（仅对重放生效的提示实时重算） <a href="#passage-card" class="section-link">← 维护通道</a></h2>
+        <h2>⑫ 换景通道规划预警（仅对重放生效的提示实时重算） <a href="#routing-suggest-card" class="section-link">通道增设建议 →</a></h2>
         <p class="hint">对每条<strong>整组生效</strong>的提示逐组规划：同组每条道具转移选一条<strong>简单路径</strong>，任意两条路径<strong>不得共用同一条通道</strong>；系统对整组<strong>联合搜索</strong>可行组合（允许把某条转移改走稍长的绕行路径，而非逐条固定最短路）。有可行组合时列出每条转移的<strong>完整经过区位</strong>；无解时标出提示号与受影响转移，并区分<strong>端点不连通</strong>与<strong>通道争用</strong>。</p>
         <p id="routing-summary" class="hint"></p>
         <div id="routing-alerts"></div>
         <div id="routing-groups"></div>
+      </div>
+    </section>
+
+    <!-- 九、通道增设建议（按需生成，只预览，不写入通道） -->
+    <section class="row">
+      <div class="card wide" id="routing-suggest-card">
+        <h2>⑬ 通道增设建议（按需试算 · 只预览，不写入通道） <a href="#routing-card" class="section-link">← 返回通道规划预警</a></h2>
+        <p class="hint">仅根据<strong>最新重放</strong>结果，针对上方<strong>原本无解的生效提示</strong>（端点不连通 / 通道争用），从<strong>现有区位间尚未连接的无向区位对</strong>中搜索<strong>至多两条</strong>新增通道：按新增条数 <strong>1 条 → 2 条</strong>升序试算（条数少者优先），每个候选都复用整组联合路径求解（非逐条最短路），使所有生效提示都取得互不共边的线路；同条数有多解时按端点名称排序取首组。本操作<strong>只在内存中预览</strong>，不会在 ⑪ 中新增或修改任何通道；区位 / 通道 / 提示变化后建议自动失效，需重新生成。</p>
+        <div class="btn-row">
+          <button type="button" id="routing-suggest-run">🧩 生成通道增设建议</button>
+          <span id="routing-suggest-state" class="hint"></span>
+        </div>
+        <div id="routing-suggest-panel" class="preview-panel hidden"></div>
       </div>
     </section>
   </main>

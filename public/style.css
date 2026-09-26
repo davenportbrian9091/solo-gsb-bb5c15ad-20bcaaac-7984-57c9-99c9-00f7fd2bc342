@@ -561,3 +561,41 @@ button:disabled { opacity: .55; cursor: wait; }
 .rt2-cluster-head .hint { display: inline; margin: 0 0 0 4px; font-size: 12px; }
 .rt2-cluster-list { margin: 6px 0 0; padding-left: 20px; font-size: 13px; }
 .rt2-cluster-list li { margin: 2px 0; }
+
+/* ---------- ⑬ 通道增设建议（修复前 / 修复后并列对照与搜索范围说明） ---------- */
+.rt2-suggest-edge {
+  display: inline-block;
+  background: rgba(76, 175, 125, .14);
+  border: 1px solid var(--ok);
+  color: var(--ok);
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 2px 12px;
+  font-size: 13.5px;
+  margin: 0 4px 4px 0;
+  white-space: nowrap;
+}
+.rt2-fix {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  margin: 10px 0 14px;
+}
+.rt2-fix-side { flex: 1; min-width: 0; }
+.rt2-fix-arrow {
+  display: flex;
+  align-items: center;
+  color: var(--accent);
+  font-size: 18px;
+}
+.rt2-fix-side .rt2-group { margin-bottom: 0; }
+.rt2-search-scope {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  padding: 8px 12px;
+}
+.rt2-scope-list { margin: 6px 0 0; padding-left: 20px; font-size: 12.5px; color: var(--muted); }
+.rt2-scope-list li { margin: 3px 0; }
+.rt2-scope-list strong { color: var(--text); }
