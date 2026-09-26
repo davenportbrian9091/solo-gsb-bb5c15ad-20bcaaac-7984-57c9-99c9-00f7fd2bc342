@@ -368,16 +368,21 @@ function diagnoseContention(transfers, pathLists) {
 }
 
 /**
- * 对单条（已生效）提示求解通道规划。
+ * 对单条（已生效）提示求解通道规划——基础求解，不做争用诊断。
+ *
+ * 返回状态 'ok' / 'disconnected' / 'limited' / 'contention'；为 'contention'
+ * 时额外携带 pathLists（各转移的全部候选简单路径），供 planCue 继续做
+ * 极小不可行子集诊断，或供通道增设试算直接复判，避免重复枚举。
  *
  * @param {{number:number, note:string, transfers:Array}} cue
  * @param {Map<string, string[]>} adj 通道邻接表
  * @returns {{number:number, note:string, status:'ok'|'disconnected'|'contention'|'limited',
  *   routes:Array<{prop, from, to, path:string[], edges:string[], hops:number}>,
  *   disconnected:Array<{index:number, prop:string, from:string, to:string}>,
- *   contention:null|{clusters:Array, affected:number[], truncated:boolean}}}
+ *   contention:null, pathLists?:Array<string[]>[],
+ *   limited?:{message:string, code:string, from:string, to:string, cap:number}}}
  */
-function planCue(cue, adj) {
+function planCueBasic(cue, adj) {
   const transfers = cue.transfers;
   const base = { number: cue.number, note: cue.note };
 
@@ -429,10 +434,22 @@ function planCue(cue, adj) {
     };
   }
 
-  // 4) 各端点均可达但联合排不开：通道争用，做极小不可行子集诊断
-  const diagnosis = diagnoseContention(transfers, pathLists);
+  // 4) 各端点均可达但联合排不开：通道争用。候选路径一并返回，
+  //    由 planCue 做极小不可行子集诊断（增设试算只关心是否转为可行，直接复用）。
+  return { ...base, status: 'contention', routes: [], disconnected: [], contention: null, pathLists };
+}
+
+/**
+ * 对单条（已生效）提示求解通道规划：在 planCueBasic 的基础上，对通道争用
+ * 情形补做极小不可行子集（争用簇）诊断。字段结构见 planCueBasic。
+ */
+function planCue(cue, adj) {
+  const basic = planCueBasic(cue, adj);
+  if (basic.status !== 'contention') return basic;
+  const diagnosis = diagnoseContention(cue.transfers, basic.pathLists);
   return {
-    ...base,
+    number: basic.number,
+    note: basic.note,
     status: 'contention',
     routes: [],
     disconnected: [],
@@ -491,6 +508,7 @@ function computeRouting(locations, passages, cues, results) {
 module.exports = {
   computeRouting,
   planCue,
+  planCueBasic,
   buildGraph,
   reachable,
   allSimplePaths,

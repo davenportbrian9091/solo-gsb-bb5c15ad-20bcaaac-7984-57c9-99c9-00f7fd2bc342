@@ -11,7 +11,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 COPY --from=builder /app/node_modules ./node_modules
-COPY package.json server.js db.js replay.js assignment.js rotation.js absence.js routing.js ./
+COPY package.json server.js db.js replay.js assignment.js rotation.js absence.js routing.js passage-advice.js ./
 COPY public ./public
 
 # SQLite 数据文件目录（首次启动自动建表并写入示例数据），可挂载卷持久化

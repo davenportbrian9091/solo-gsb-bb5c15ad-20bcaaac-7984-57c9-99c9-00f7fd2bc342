@@ -561,3 +561,33 @@ button:disabled { opacity: .55; cursor: wait; }
 .rt2-cluster-head .hint { display: inline; margin: 0 0 0 4px; font-size: 12px; }
 .rt2-cluster-list { margin: 6px 0 0; padding-left: 20px; font-size: 13px; }
 .rt2-cluster-list li { margin: 2px 0; }
+
+/* 卡片标题中的多个跳转链接 */
+.header-links { display: inline-flex; gap: 10px; float: right; }
+
+/* 通道增设建议 */
+#advice-run { min-width: 260px; }
+.adv-found-banner { line-height: 1.9; }
+.adv-edge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  padding: 2px 12px;
+  margin: 0 2px;
+  border: 1px solid var(--ok);
+  background: rgba(76, 175, 125, .12);
+  color: var(--text);
+}
+.adv-edge .passage-edge { color: var(--ok); font-weight: 700; }
+.adv-scope {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--card2);
+  padding: 8px 12px;
+  margin: 10px 0;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--muted);
+}
+.adv-scope strong { color: var(--text); }

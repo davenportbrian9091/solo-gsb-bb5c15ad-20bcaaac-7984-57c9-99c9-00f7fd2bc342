@@ -225,6 +225,7 @@ function render() {
   renderAbsenceForm();
   renderPassages();
   renderRouting();
+  clearAdviceResult();
 }
 
 /* ---------- 换景人员与逐提示岗位表 ---------- */
@@ -1512,6 +1513,125 @@ function renderRouting() {
     <h3>逐组通道线路（联合搜索结果，随区位 / 通道 / 提示变更实时重算）</h3>
     ${rt.groups.map(routingGroupHtml).join('')}`;
 }
+
+/* ---------- 通道增设建议（按需试算，仅预览不写通道） ---------- */
+
+function clearAdviceResult() {
+  const panel = $('#advice-panel');
+  if (!panel) return;
+  panel.classList.add('hidden');
+  panel.innerHTML = '';
+}
+
+function adviceScopeHtml(scope) {
+  const sc = scope || {};
+  return `
+    <div class="adv-scope">
+      搜索范围：现有 <strong>${sc.candidatePairs != null ? sc.candidatePairs : '—'}</strong> 个尚未连接的无向区位对；
+      按新增条数由少到多试算——<strong>1 条</strong>新增方案 <strong>${sc.oneEdgeCandidates != null ? sc.oneEdgeCandidates : '—'}</strong> 组、
+      <strong>2 条</strong>新增组合 <strong>${sc.twoEdgeCandidates != null ? sc.twoEdgeCandidates : '—'}</strong> 组
+      （上限 ${sc.maxNewEdges != null ? sc.maxNewEdges : 2} 条；同条数多解按端点名称排序取首组），
+      实际完成 <strong>${sc.trials != null ? sc.trials : '—'}</strong> 组次试算（每组次对修复前无解提示复用整组联合路径求解）。
+    </div>`;
+}
+
+function renderAdviceResult(data) {
+  const panel = $('#advice-panel');
+  const scopeBlock = adviceScopeHtml(data.scope);
+
+  const beforeBlocks = (data.before || []).map(routingGroupHtml).join('');
+  const beforeSection = `
+    <h4>修复前 · 原无解提示的规划状态（当前通道）</h4>
+    ${beforeBlocks || '<p class="hint">（无）</p>'}`;
+
+  if (data.status === 'empty') {
+    panel.innerHTML = `
+      <div class="pv-title">🧩 通道增设建议（仅内存试算，未写入通道）</div>
+      <p class="hint">当前没有任何整组生效的提示，无需规划通道线路，也没有需要增设通道修复的提示（失败提示不参与）。</p>`;
+    panel.classList.remove('hidden');
+    return;
+  }
+
+  if (data.status === 'already_feasible') {
+    panel.innerHTML = `
+      <div class="pv-title">🧩 通道增设建议（仅内存试算，未写入通道）</div>
+      <div class="rt2-banner-ok">✓ 现有通道下全部 <strong>${data.effectiveCueCount}</strong> 条生效提示都已取得互不共边的线路，<strong>无需增设通道</strong>。</div>
+      ${data.skippedCueCount ? `<p class="hint">另有 ${data.skippedCueCount} 条失败（未生效）提示不参与规划。</p>` : ''}`;
+    panel.classList.remove('hidden');
+    return;
+  }
+
+  if (data.status === 'limited') {
+    panel.innerHTML = `
+      <div class="pv-title">🧩 通道增设建议 · <span class="sum-lack">未计算</span>（仅内存试算，未写入通道）</div>
+      <div class="rt-blocked">
+        <div class="rt-block-title">⚠️ 试算未计算（不宣称最优，也不宣称无解）</div>
+        <p>${esc(data.limited ? data.limited.message : '试算过程中遇到规模上限，本次建议未计算。')}</p>
+      </div>
+      ${scopeBlock}
+      ${beforeSection}`;
+    panel.classList.remove('hidden');
+    return;
+  }
+
+  if (data.status === 'not_found') {
+    panel.innerHTML = `
+      <div class="pv-title">🧩 通道增设建议（仅内存试算，未写入通道）</div>
+      <div class="rt-blocked">
+        <div class="rt-block-title">✗ 两条以内无解</div>
+        <p>已在「现有区位之间尚未连接的无向区位对」范围内，按新增条数由少到多（先 1 条、再 2 条的全部组合）全部试算完毕，
+        并复用整组联合路径求解——<strong>仅增设至多 2 条通道，无法让全部生效提示都取得互不共边的线路</strong>。
+        这不是整体最优性结论：增设 3 条及以上通道、或调整现有提示，仍可能排开。下列提示在本次搜索范围内仍无法修复：</p>
+      </div>
+      ${scopeBlock}
+      ${beforeSection}`;
+    panel.classList.remove('hidden');
+    return;
+  }
+
+  // found：建议连接 + 修复前状态 + 修复后完整线路
+  const chips = data.additions
+    .map((e) => `<span class="chip adv-edge"><strong>${esc(e.a)}</strong> <span class="passage-edge">—</span> <strong>${esc(e.b)}</strong></span>`)
+    .join('');
+  const afterBlocks = (data.after || []).map(routingGroupHtml).join('');
+  const fixedNums = (data.before || []).map((g) => g.number).join('、');
+  panel.innerHTML = `
+    <div class="pv-title">🧩 通道增设建议（仅内存试算，未写入通道）</div>
+    <div class="rt2-banner-ok adv-found-banner">
+      ✓ 建议增设 <strong>${data.additions.length}</strong> 条通道：${chips}
+      —— 增设后原无解的提示 <strong>${esc(fixedNums)}</strong> 均可取得互不共边的线路（同条数多解时已按端点名称排序选择首组）。
+    </div>
+    ${data.skippedCueCount ? `<p class="hint">另有 ${data.skippedCueCount} 条失败（未生效）提示不参与规划。</p>` : ''}
+    <p class="hint">下列线路为<strong>假设增设后的预览结果</strong>，通道并未真正写入；如需采纳，请在 ⑪ 换景通道中手动添加对应连接。</p>
+    ${scopeBlock}
+    ${beforeSection}
+    <h4>修复后 · 全部生效提示的完整线路（假设增设上述通道，两两不共边）</h4>
+    ${afterBlocks}`;
+  panel.classList.remove('hidden');
+}
+
+function renderAdviceError(msg) {
+  const panel = $('#advice-panel');
+  panel.innerHTML = `<div class="pv-title">🧩 通道增设建议</div><div class="pv-error">${esc(msg)}</div>`;
+  panel.classList.remove('hidden');
+}
+
+$('#advice-run').addEventListener('click', async () => {
+  const btn = $('#advice-run');
+  btn.disabled = true;
+  btn.textContent = '试算搜索中…';
+  try {
+    const res = await fetch('/api/routing/advice');
+    const data = await res.json();
+    if (!res.ok) renderAdviceError(data.error || '建议生成失败');
+    else renderAdviceResult(data);
+  } catch (err) {
+    renderAdviceError('无法连接服务器');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🧩 生成通道增设建议（不写通道）';
+  }
+});
 
 /* ---------- 启动 ---------- */
 

@@ -13,6 +13,7 @@ const { computeAssignments } = require('./assignment');
 const { computeRotation } = require('./rotation');
 const { normalizeAbsenceRules, computeAbsenceRotation } = require('./absence');
 const { computeRouting } = require('./routing');
+const { computePassageAdvice } = require('./passage-advice');
 
 const app = express();
 app.use(express.json());
@@ -630,6 +631,28 @@ app.get('/api/rotation', (req, res) => {
 app.get('/api/routing', (req, res) => {
   const { routing } = loadState();
   res.json(routing);
+});
+
+/* ---------- 通道增设建议（按需试算查询 API，只读、不写通道） ----------
+ * 只针对最新重放的**生效提示**，从现有区位之间**尚未连接**的无向区位对
+ * 中，按新增条数由少到多（先 1 条、再 2 条）试算；每组试算复用 routing.js
+ * 的整组联合路径求解，只重规划修复前无解的组；同条数多解时按端点名称
+ * 排序取首组。命中后再对全部生效提示完整重算修复后线路。
+ * 整个过程只读取现有状态、在内存中试算：**不新增 / 修改 / 删除任何通道**。
+ * 两条以内确实无解时由结果中的 scope 明确搜索范围；任一必要试算遇路径
+ * 规模上限或试算组数上限时返回 status 'limited'（未计算），不宣称最优或无解。
+ */
+app.get('/api/routing/advice', (req, res) => {
+  const { locations, props, cues } = loadBaseData();
+  const passages = loadPassages();
+  const replayResult = replay(locations, props, cues);
+  const advice = computePassageAdvice(
+    locations,
+    passages.map((p) => ({ loc_a: p.a, loc_b: p.b })),
+    cues,
+    replayResult.results
+  );
+  res.json(advice);
 });
 
 /* ---------- 临时缺席试排（不写库） ----------

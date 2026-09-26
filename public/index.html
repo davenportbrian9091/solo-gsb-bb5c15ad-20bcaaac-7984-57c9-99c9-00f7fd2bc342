@@ -9,7 +9,7 @@
 <body>
   <header>
     <h1>🎭 舞台换景排练系统</h1>
-    <p>设置道具初始区位 → 按提示号录入同组转移 → 全量重放校验，整组通过才生效 → 按人员资格生成逐提示岗位表，并对整场生效提示联合求解连场轮换排班；还可临时添加缺席规则（人员 × 提示号闭区间）进行不写库的缺席试排。另有<strong>换景通道规划</strong>：在区位间维护无向通道，系统对每条<strong>生效提示</strong>逐组联合搜索互不共边的简单路径组合（非逐条最短路），无解时区分端点不连通与通道争用，作为独立预警实时展示</p>
+    <p>设置道具初始区位 → 按提示号录入同组转移 → 全量重放校验，整组通过才生效 → 按人员资格生成逐提示岗位表，并对整场生效提示联合求解连场轮换排班；还可临时添加缺席规则（人员 × 提示号闭区间）进行不写库的缺席试排。另有<strong>换景通道规划</strong>：在区位间维护无向通道，系统对每条<strong>生效提示</strong>逐组联合搜索互不共边的简单路径组合（非逐条最短路），无解时区分端点不连通与通道争用，作为独立预警实时展示；并在预警旁提供按需生成的<strong>通道增设建议</strong>（至多两条、仅预览不写通道，遇规模上限显示未计算）</p>
   </header>
 
   <main>
@@ -181,11 +181,25 @@
       </div>
 
       <div class="card" id="routing-card">
-        <h2>⑫ 换景通道规划预警（仅对重放生效的提示实时重算） <a href="#passage-card" class="section-link">← 维护通道</a></h2>
+        <h2>⑫ 换景通道规划预警（仅对重放生效的提示实时重算） <span class="header-links"><a href="#passage-card" class="section-link">← 维护通道</a><a href="#advice-card" class="section-link">通道增设建议 →</a></span></h2>
         <p class="hint">对每条<strong>整组生效</strong>的提示逐组规划：同组每条道具转移选一条<strong>简单路径</strong>，任意两条路径<strong>不得共用同一条通道</strong>；系统对整组<strong>联合搜索</strong>可行组合（允许把某条转移改走稍长的绕行路径，而非逐条固定最短路）。有可行组合时列出每条转移的<strong>完整经过区位</strong>；无解时标出提示号与受影响转移，并区分<strong>端点不连通</strong>与<strong>通道争用</strong>。</p>
         <p id="routing-summary" class="hint"></p>
         <div id="routing-alerts"></div>
         <div id="routing-groups"></div>
+      </div>
+    </section>
+
+    <!-- 九、通道增设建议（按需试算，仅预览不写通道） -->
+    <section class="row">
+      <div class="card wide" id="advice-card">
+        <h2>⑬ 通道增设建议（按需试算，仅预览不写入通道） <a href="#routing-card" class="section-link">← 通道规划预警</a></h2>
+        <p class="hint">基于<strong>最新重放结果</strong>，只针对<strong>生效提示</strong>，从现有区位之间<strong>尚未连接</strong>的无向区位对中搜索<strong>至多两条</strong>新增通道：按新增条数<strong>由少到多</strong>试算（先试 1 条，再试 2 条的全部组合），并复用通道规划的<strong>整组联合路径求解</strong>，使所有生效提示都能取得<strong>互不共边</strong>的线路；同条数有多解时按端点名称排序选择首组。命中后并列展示<strong>建议连接、原无解提示的修复前状态与修复后完整线路</strong>。本操作只在内存中试算预览，<strong>不会新增或改动任何通道</strong>；两条以内确实无解时明确说明搜索范围，任一必要试算遇路径规模上限时显示<strong>未计算</strong>，不宣称最优或无解。</p>
+        <div class="btn-row">
+          <button type="button" id="advice-run">🧩 生成通道增设建议（不写通道）</button>
+          <span class="spacer"></span>
+          <span class="hint">区位 / 通道 / 提示变化后旧建议自动失效，需重新生成。</span>
+        </div>
+        <div id="advice-panel" class="preview-panel hidden"></div>
       </div>
     </section>
   </main>
