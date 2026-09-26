@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>舞台换景排练系统</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>🎭 舞台换景排练系统</h1>
+    <p>设置道具初始区位 → 按提示号录入同组转移 → 全量重放校验，整组通过才生效 → 按人员资格生成逐提示岗位表，并对整场生效提示联合求解连场轮换排班；还可临时添加缺席规则（人员 × 提示号闭区间）进行不写库的缺席试排。另有<strong>换景通道规划</strong>：在区位间维护无向通道，系统对每条<strong>生效提示</strong>逐组联合搜索互不共边的简单路径组合（非逐条最短路），无解时区分端点不连通与通道争用，作为独立预警实时展示</p>
+  </header>
+
+  <main>
+    <!-- 一、区位与道具 -->
+    <section class="row">
+      <div class="card">
+        <h2>① 区位</h2>
+        <p class="hint">「后台」容量不限，其余区位各容纳一件道具。</p>
+        <ul id="location-list" class="tag-list"></ul>
+        <form id="location-form" class="inline-form">
+          <input id="location-name" type="text" placeholder="新区位名称" required />
+          <button type="submit">添加区位</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>② 道具与初始区位</h2>
+        <table class="table">
+          <thead><tr><th>道具</th><th>初始区位</th><th></th></tr></thead>
+          <tbody id="prop-rows"></tbody>
+        </table>
+        <form id="prop-form" class="inline-form">
+          <input id="prop-name" type="text" placeholder="新道具名称" required />
+          <select id="prop-location" required></select>
+          <button type="submit">添加道具</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- 二、提示录入 -->
+    <section class="row">
+      <div class="card wide">
+        <h2>③ 录入提示（一组同时发生的转移）</h2>
+        <p class="hint">提示号唯一；同组内每件道具最多转移一次；整组校验通过才生效，允许同组互换区位。</p>
+        <form id="cue-form">
+          <div class="inline-form">
+            <label>提示号 <input id="cue-number" type="number" min="1" step="1" required /></label>
+            <label class="grow">备注 <input id="cue-note" type="text" placeholder="可选，如：一幕开场" /></label>
+          </div>
+          <table class="table">
+            <thead><tr><th>道具</th><th>来源区位</th><th>目标区位</th><th></th></tr></thead>
+            <tbody id="transfer-rows"></tbody>
+          </table>
+          <div class="btn-row">
+            <button type="button" id="add-transfer" class="ghost">＋ 添加一条转移</button>
+            <span class="spacer"></span>
+            <button type="button" id="cue-preview" class="ghost">🧪 试排预览（不保存）</button>
+            <button type="submit" id="cue-submit">保存提示</button>
+            <button type="button" id="cue-cancel" class="ghost hidden">取消编辑</button>
+          </div>
+        </form>
+        <div id="cue-preview-panel" class="preview-panel hidden"></div>
+      </div>
+    </section>
+
+    <!-- 三、提示列表 + 重放结果 -->
+    <section class="row">
+      <div class="card">
+        <h2>④ 提示序列（按提示号重放）</h2>
+        <div class="shift-box">
+          <h3>批量平移提示号</h3>
+          <p class="hint">输入闭区间起止号与非零整数位移，先「预览平移」列出每条提示的原号→新号；校验通过（区间非空、新号均为安全正整数且不与区间外提示号冲突）后方可执行，执行在单个事务中完成并全量重放。</p>
+          <form id="shift-form" class="inline-form">
+            <label>起始号 <input id="shift-from" type="number" min="1" step="1" required /></label>
+            <label>结束号 <input id="shift-to" type="number" min="1" step="1" required /></label>
+            <label>位移 <input id="shift-delta" type="number" step="1" placeholder="非零整数" required /></label>
+            <button type="button" id="shift-preview" class="ghost">预览平移</button>
+            <button type="submit" id="shift-apply" class="danger" disabled>执行平移</button>
+          </form>
+          <div id="shift-preview-panel" class="preview-panel hidden"></div>
+        </div>
+        <div id="cue-list"></div>
+      </div>
+      <div class="card">
+        <h2>⑤ 重放结果与最终区位</h2>
+        <div id="replay-results"></div>
+        <h3>最终区位</h3>
+        <div id="final-board" class="board"></div>
+      </div>
+    </section>
+
+    <!-- 四、现场偏差推演 -->
+    <section class="row">
+      <div class="card wide">
+        <h2>⑥ 现场偏差推演（仅内存，不写库）</h2>
+        <p class="hint">选择已执行完的提示号作为断点，录入部分道具的现场区位（留空即沿用该断点的计划区位）。系统先按现有规则重放至断点并校验现场区位（区位须存在、普通区位不重叠），再以校正后的现场状态接续重放后续提示，失败组仍整组不生效。推演不会修改提示、道具初始区位或数据库。</p>
+        <form id="sim-form">
+          <div class="inline-form">
+            <label>断点（已执行完的提示号）
+              <select id="sim-breakpoint" required>
+                <option value="">请选择断点提示号…</option>
+              </select>
+            </label>
+            <span class="spacer"></span>
+            <button type="submit" id="sim-run">🎯 开始现场推演</button>
+          </div>
+          <table class="table sim-table">
+            <thead><tr><th>道具</th><th>断点处计划区位</th><th>现场区位（留空 = 沿用计划）</th></tr></thead>
+            <tbody id="sim-rows"></tbody>
+          </table>
+        </form>
+        <div id="sim-panel" class="preview-panel hidden"></div>
+      </div>
+    </section>
+
+    <!-- 五、换景人员与逐提示岗位表 -->
+    <section class="row">
+      <div class="card">
+        <h2>⑦ 换景人员与搬运资格</h2>
+        <p class="hint">维护工作人员及其可搬运的道具名单；人员或资格变化后，右侧岗位表立即按最新数据重算。</p>
+        <div id="staff-list"></div>
+        <form id="staff-form" class="inline-form">
+          <input id="staff-name" type="text" placeholder="新人员姓名" required />
+          <button type="submit">添加人员</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>⑧ 逐提示岗位表 <a href="#rotation-card" class="section-link">连场轮换排班 →</a></h2>
+        <p class="hint">以最新重放结果为准：仅生效提示需要执行；每条道具转移占一个同时执行的岗位，同组每人最多一岗且须具备该道具的搬运资格。服务端对整组求完整匹配（非按录入顺序贪心）；无法整组覆盖时标为「人手不足」并给出「资格瓶颈诊断」——按整组最大匹配找出未匹配转移沿资格竞争关系可达的道具与人员，分竞争簇列出每簇缺口人数及道具、人员名单；不输出部分岗位表。</p>
+        <p id="assignment-summary" class="hint"></p>
+        <div id="assignment-list"></div>
+      </div>
+    </section>
+
+    <!-- 六、连场轮换排班（整场联合求解） -->
+    <section class="row">
+      <div class="card wide" id="rotation-card">
+        <h2>⑨ 连场轮换排班（整场联合求解）<a href="#absence-card" class="section-link">临时缺席试排 →</a></h2>
+        <p class="hint">把整场<strong>生效提示</strong>按提示号串成连场轮次（失败提示不计轮次、不隔开前后轮）：每条转移仍须由具备该道具资格的人员承担、同组每人一岗，且<strong>同一人员不得出现在相邻两条生效提示中</strong>。排班会对整场联合求解，允许回头调整前序提示的合法分配；任何人员、资格或提示变化后立即按最新数据重算。无法覆盖全场时，只报告<strong>首个无法形成可行前缀的提示号及其前一条生效提示号</strong>，不输出部分岗位表。</p>
+        <p id="rotation-summary" class="hint"></p>
+        <div id="rotation-panel"></div>
+      </div>
+    </section>
+
+    <!-- 七、临时缺席试排（仅内存，不写库、不改正式排班） -->
+    <section class="row">
+      <div class="card wide" id="absence-card">
+        <h2>⑩ 临时缺席试排（仅内存，不保存规则、不改动正式排班）</h2>
+        <p class="hint">临时添加多条缺席规则，每条指定一名<strong>现有人员</strong>与一个<strong>提示号闭区间</strong>；区间按提示号覆盖全量重放后<strong>生效</strong>的提示（失败提示不占轮次），多条规则重叠时取<strong>并集</strong>。试排沿用搬运资格、组内一人一岗及<strong>相邻生效提示不得同人</strong>规则，对整场<strong>联合求解并允许回溯调整前序分配</strong>；某轮缺席人员不能出场，区间外仍可参与。规则不会保存，人员 / 资格 / 提示一有变化，旧试排结果即清空。</p>
+        <form id="absence-form">
+          <table class="table absence-table">
+            <thead><tr><th>缺席人员</th><th>提示号区间起</th><th>提示号区间止（闭区间）</th><th></th></tr></thead>
+            <tbody id="absence-rows"></tbody>
+          </table>
+          <div class="btn-row">
+            <button type="button" id="absence-add" class="ghost">＋ 添加一条规则</button>
+            <span class="spacer"></span>
+            <button type="button" id="absence-clear" class="ghost">清空规则</button>
+            <button type="submit" id="absence-run">🧯 开始临时缺席试排</button>
+          </div>
+        </form>
+        <div id="absence-panel" class="preview-panel hidden"></div>
+      </div>
+    </section>
+
+    <!-- 八、换景通道维护 -->
+    <section class="row">
+      <div class="card" id="passage-card">
+        <h2>⑪ 换景通道（区位间无向通道） <a href="#routing-card" class="section-link">通道规划预警 →</a></h2>
+        <p class="hint">通道<strong>不区分方向</strong>，供道具在区位间换景通行；同一对区位只能有一条通道，不能把一个区位连到自身（自环）。删除区位时其关联通道会自动清理。通道、区位或提示一有变化，右侧预警立即重算。</p>
+        <ul id="passage-list" class="passage-list"></ul>
+        <form id="passage-form" class="inline-form">
+          <select id="passage-a" required></select>
+          <span class="arrow">—</span>
+          <select id="passage-b" required></select>
+          <button type="submit">添加通道</button>
+        </form>
+      </div>
+
+      <div class="card" id="routing-card">
+        <h2>⑫ 换景通道规划预警（仅对重放生效的提示实时重算） <a href="#passage-card" class="section-link">← 维护通道</a></h2>
+        <p class="hint">对每条<strong>整组生效</strong>的提示逐组规划：同组每条道具转移选一条<strong>简单路径</strong>，任意两条路径<strong>不得共用同一条通道</strong>；系统对整组<strong>联合搜索</strong>可行组合（允许把某条转移改走稍长的绕行路径，而非逐条固定最短路）。有可行组合时列出每条转移的<strong>完整经过区位</strong>；无解时标出提示号与受影响转移，并区分<strong>端点不连通</strong>与<strong>通道争用</strong>。</p>
+        <p id="routing-summary" class="hint"></p>
+        <div id="routing-alerts"></div>
+        <div id="routing-groups"></div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="hidden"></div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"          # 如需改端口，改左侧宿主机端口即可，如 "8080:3000"
+    environment:
+      - PORT=3000            # 容器内服务端口
+      - DATA_DIR=/app/data   # SQLite 数据目录
+    volumes:
+      - stage-data:/app/data # 持久化数据库，删除容器不丢数据
+    restart: unless-stopped
+
+volumes:
+  stage-data:
